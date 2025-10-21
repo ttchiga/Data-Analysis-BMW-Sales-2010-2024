@@ -1,0 +1,767 @@
+---
+title: "BMW Sales Analysis 2010-2024"
+format: 
+  dashboard
+fig-width: 10
+fig-asp: 0.3
+---
+
+```{r environment setup}
+#| label: environment setup
+#| include: false 
+
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(stringdist)
+library(stringr)
+library(recipes)
+library(FactoMineR)
+library(factoextra)
+library(gridExtra)
+library(patchwork)
+library(tidytext)
+library(readr)
+library(janitor)
+library(scales)
+library(broom)
+library(purrr)
+library(forcats)
+library(ggrepel)
+```
+
+```{r}
+#| label: load & preview data 
+#| include: false 
+
+df <- read.csv("~/Downloads/BMW sales data (2010-2024).csv", sep=",")
+
+# check a little bit of data to get an idea of what I have on hand 
+df%>% head()
+
+
+# make sure there is no data that is repeated 
+distinct(df)
+
+
+# summary of data 
+summary(df)
+
+# checking data types
+str(df)
+# we want the year data to be in date format 
+```
+
+```{r}
+#| label: data clean and fns 
+#| include: false 
+
+df$date <- as.Date(paste0(df$Year,"-01-01"))
+df$fuel_efficiency <-as.factor(df$Engine_Size_L)
+
+df%>%
+  group_by(Sales_Classification)%>%
+  summarise(top_sales = max(Sales_Volume) )
+
+## if you sell more than 7000 units, then that model in that year will be classified as having high sales 
+## anything below that is considered as having low sales 
+
+
+#standardize column names and generate revenue column and transform engine size from numeric to factor for categorical analysis 
+df<- df%>%
+  clean_names()%>%
+  mutate(revenue = sales_volume*price_usd,
+         gasoline_consumption= as.factor(engine_size_l))
+
+# Custom function to format numbers
+format_number <- function(x) {
+  case_when(
+    abs(x) >= 1e12 ~ paste0(round(x/1e12,1), "T"),
+    abs(x) >= 1e6 ~ paste0(round(x/1e6, 1), "M"),
+    abs(x) >= 1e3 ~ paste0(round(x/1e3, 1), "K"),
+    TRUE ~ as.character(x)
+  )
+}
+
+```
+
+```{r}
+#| label: Data prep for valueboxes 
+#| include: false 
+
+total_vehicles_sold <- df |>
+  summarize(total=sum(sales_volume))|>
+  mutate(total = format_number(total))
+
+average_price <- df |>
+  summarize(ave_vehicle_price =mean(price_usd))|>
+  mutate(ave_vehicle_price = format_number(ave_vehicle_price))
+
+total_revenue <- df |>
+  summarise(total_rev =sum(revenue))|>
+  mutate(total_rev = format_number(total_rev))
+```
+
+# Macro Trends
+
+## Macro Information {height="20%"}
+
+::: {.valuebox icon="car-front-fill" color="#00BFFF"}
+Vehicles Sold :
+
+`{r} total_vehicles_sold`
+:::
+
+::: {.valuebox icon="currency-dollar" color="#17A2B8"}
+Average Cost:
+
+`{r} paste0("$", average_price)`
+:::
+
+::: {.valuebox icon="cash-stack" color="#00BFFF"}
+Total Revenue Earned:
+
+`{r} paste0("$", total_revenue)`
+:::
+
+## Row {height="45%"}
+
+### Sales Distribution across Models {.tabset width="40%"}
+
+```{r}
+#| label: Overall 
+#| title: Price Distribution of BMW Models 
+#| fig-subcap: Arranged in ascending order of Median Price 
+
+  # lets try a box plot over the different models 
+df %>%
+  ggplot(aes(x = reorder(model, price_usd, FUN = median), y = price_usd)) +
+  geom_boxplot(fill = "steelblue", outlier.alpha = 0.5) +
+  labs(
+    title = "",
+    x = "Model",
+    y = "Price ($)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  ) +
+  scale_y_continuous(labels = scales::dollar) # Format y-axis as dollars
+## the average 7 series over the years of analysis is the most expensive of the models under analysis 
+
+```
+
+```{r}
+#| label: Price trends over our years of interest across regions where BMWs are sold 
+#| include: false
+
+# First, let's create a summary data frame
+price_summary <- df %>% 
+  group_by(date, region) %>%
+  summarise(avg_price = median(price_usd), .groups = 'drop')
+
+# Identify which regions to highlight (replace with your desired regions)
+highlight_regions <- c("North America", "Europe", "Asia")
+
+# Create a filtered version for labeling (just the latest date for each region)
+label_data <- price_summary %>%
+  group_by(region) %>%
+  filter(date == max(date))
+
+```
+
+```{r}
+#| label: Price Changes v2 
+#| title: Vehicles in NA become Expensive as Europe gets Cheaper
+
+
+# Create the plot
+ggplot(price_summary, aes(x = date, y = avg_price, group = region)) +
+  # Plot all regions in gray first
+  geom_line(data = filter(price_summary, !region %in% highlight_regions), 
+            color = "gray70", size = 0.8, alpha = 0.7) +
+  # Plot highlighted regions with blue colors
+  geom_line(data = filter(price_summary, region %in% highlight_regions),
+            aes(color = region), size = 1.5) +
+  # Add points for highlighted regions
+  geom_point(data = filter(price_summary, region %in% highlight_regions),
+             aes(color = region), size = 2, alpha = 0.8) +
+  # Add labels only at the end of each line
+  geom_text_repel(data = label_data, 
+                  aes(label = region, color = region),
+                  size = 3.5, direction = "y", box.padding = 0.4,
+                  hjust = 0, nudge_x = 30, segment.size = 0.2,
+                  show.legend = FALSE) +
+  # Custom blue color palette for highlighted regions
+  scale_color_manual(values = c("North America" = "darkblue", 
+                               "Europe" = "lightblue", 
+                               "Asia" = "steelblue")) +
+  labs(
+    title = "Average Price of BMW Models by Region (2010-2024)",
+    x = "Year",
+    y = "Price (USD)",
+    color = "Highlighted Regions"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
+    legend.position = "bottom"
+  ) +
+  scale_y_continuous(labels = scales::dollar)
+## North America BMW's faced a huge increase in price after years in which they were the cheapest
+## Asia has the highest prices of BMW's since 2017 
+## Europe BMW's prices have been facing downward pressure 
+
+```
+
+### Changes in Prices and Volume over Period of Concern {width="60%"}
+
+```{r}
+#| label: Volume and Sales 
+#| include: false
+
+df_plot<- df%>%
+  group_by(date)%>%
+  summarise(total_sales= sum(sales_volume),
+            total_revenue= sum (revenue),
+            avg_price=mean(price_usd),
+            .groups = "drop_last")%>%
+  arrange(avg_price)%>%
+  ungroup()
+
+ 
+max_sales <- max(df_plot$total_sales, na.rm = TRUE)
+max_price <- max(df_plot$avg_price, na.rm = TRUE)
+min_price <- min(df_plot$avg_price, na.rm = TRUE)
+price_range <- max_price - min_price
+
+
+# Set your desired zoom level (e.g., show ±10% of the range)
+zoom_factor <- 0.15
+desired_min <- min_price- (price_range * zoom_factor)
+desired_max <- max_price + (price_range * zoom_factor)
+scale_factor <-max_sales / (desired_max - desired_min)
+```
+
+```{r}
+#| label: Volume and Sales grap
+#| title: Price vs Volume over 2010-2024
+
+
+ggplot(df_plot, aes(x=date))+
+  geom_col(aes(y=total_sales),fill="skyblue")+
+  geom_line(aes(y=(avg_price - desired_min)*scale_factor),color="blue",size=1.2,lineend="round")+
+  scale_y_continuous(
+    name="Sales",
+    limits = c(0, NA),  # keep sales axis starting at 0
+    labels = scales::label_number(scale = 1e-6, suffix = "M"),
+    sec.axis=sec_axis(~./scale_factor+desired_min, name="Price ",
+                        breaks = scales::pretty_breaks(5),
+              labels=scales::dollar))+ 
+      labs(
+    title = "No Concise Relationship Between Price and Volume"
+  ) +  
+  coord_cartesian(
+    ylim = c(5e-6, max(df_plot$total_sales, na.rm = TRUE) * 1.1)
+  ) +
+  guides(
+    fill = guide_legend(override.aes = list(alpha = 1)),  # Solid color swatches
+    color = guide_legend(override.aes = list(linetype = 1, shape = 16))  # Lines + points
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  ) 
+
+
+```
+
+## Revenue {height ="35%"}
+
+```{r}
+#| label: Revenue 
+#| title: Since Covid Revenue Has Been Fluctuating A lot More 
+
+df|> 
+  group_by(date)|>
+  summarise(revenue_by_year=sum(revenue))|>
+  ungroup()|>
+  ggplot((aes(date,revenue_by_year)))+
+   geom_rect(aes(xmin = as.Date("2020-01-01"), 
+                xmax = max(date),
+                ymin = -Inf, ymax = Inf),
+            fill = "lightgray", alpha = 0.2) +
+  geom_line(color="lightblue",size =1.5)+
+  geom_point(alpha=.8, color="blue")+
+  geom_vline(xintercept =as.Date("2020-01-01"), linetype = "dashed", color = "blue", linewidth = 1)+
+    scale_y_continuous( labels = label_dollar(scale = 1e-9, suffix = "B"))+
+  labs(title="Revenue Trend",
+    x="",y="Revenue ")+
+  theme_minimal()+
+   theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
+    legend.position = "bottom"
+  ) 
+  
+```
+
+# Volume Trends
+
+## Statistics {height= "20%"}
+
+```{r}
+#| label: Sale Figures 
+#| include: false 
+df_sales <- df |>
+  group_by(date) |>
+  summarize (sales_by_year= sum(sales_volume),
+             volatility_in_sales = var(sales_volume),
+             average_sales_per_year= mean(sales_volume))
+
+df_sales_final <- df_sales|>
+  summarize(volatility_in_sales = sqrt(median(volatility_in_sales)),
+            average_sales_per_year= median(sales_by_year))|>
+  mutate (average_sales_per_year= format_number(average_sales_per_year))
+
+df_sales_v2 <- df |>
+  group_by(date) |>
+  summarize (sales_by_year= sum(sales_volume)) |>
+  mutate(average_sales_per_year =mean(sales_by_year),
+         volume_diff = sales_by_year - average_sales_per_year,
+         volume_diff= volume_diff,
+         date=  as.factor(lubridate::year(date)),
+         volume_diff_Squared = volume_diff*volume_diff)
+
+volatility_in_sales<-format_number(sqrt(sum(df_sales_v2$volume_diff_Squared)/14))
+
+```
+
+::: {.valuebox icon="car-front-fill" color="#00BFFF"}
+Vehicles Sold Annually:
+
+`{r} df_sales_final$average_sales_per_year`
+:::
+
+::: {.valuebox icon="arrow-down-up" color="#17A2B8"}
+Volume Volatility on Annual Basis:
+
+`{r} volatility_in_sales`
+:::
+
+## Difference in Sales from Average per year {height="40%"}
+
+### Sales Changes {width ="35 %"}
+
+```{r}
+#| label: graph to analyse change of sales from average 
+#| title: Extreme Swings in Sales since Covid except 2021 
+#| fig-subcap: Annual Sales in year X - Average Annual Sales   
+
+ggplot(df_sales_v2, aes(x=date, fill = volume_diff>0))+
+  geom_col(aes(y=volume_diff))+
+  geom_hline(yintercept = 0, linetype = "solid", color = "black", size = 0.5)+
+  geom_hline(yintercept = 435e3, linetype = "dashed", color = "salmon", size = 0.5)+
+   geom_hline(yintercept = -435e3, linetype = "dashed", color = "salmon", size = 0.5)+
+   scale_fill_manual(values=c("TRUE"="lightblue", "FALSE" ="navyblue"))+
+  scale_y_continuous(labels = format_number)+
+  labs(subtitle = "Difference in Sales from Average Sales Per Year",
+       x="",
+       y="Sales Difference")+
+  theme_minimal()+
+      theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.subtitle = element_text( hjust = 0.5, size = 16),
+    legend.position = "none")
+```
+
+```{r}
+#|label: data prep for Sales on Fuel Type
+#|include: false 
+
+base_year <- as.Date("2010-01-01") 
+df_growth <- df %>%
+  group_by(fuel_type, date) %>%
+  summarise(
+    annual_sales = sum(sales_volume, na.rm = TRUE),
+    annual_revenue = sum(revenue, na.rm = TRUE),
+    avg_annual_price=mean(price_usd,na.rm=T),
+    .groups = "drop"
+  )%>%
+  group_by(fuel_type) %>%
+  arrange(fuel_type,date) %>%
+  mutate(
+    base_price =avg_annual_price[date==base_year],
+    price_index = round((avg_annual_price-base_price)/base_price*100,3),
+    sales_yoy_growth = round((annual_sales - lag(annual_sales)) / lag(annual_sales),3),
+    revenue_yoy_growth = round((annual_revenue - lag(annual_revenue)) / lag(annual_revenue),3),
+    sales_yoy_pct = sales_yoy_growth * 100,
+    revenue_yoy_pct = revenue_yoy_growth * 100,
+    sales_absolute_growth = annual_sales - lag(annual_sales),
+    revenue_absolute_growth = annual_revenue - lag(annual_revenue)
+  ) %>%
+  ungroup()
+
+
+volatility_df <- df_growth %>%
+  group_by(fuel_type) %>%
+  summarise(
+    volatility = sd(sales_yoy_pct, na.rm = TRUE),
+    avg_growth = mean(sales_yoy_pct, na.rm = TRUE)
+  ) %>%
+  arrange(desc(volatility))
+
+
+```
+
+### Difference in Sales based on Fuel Type per year {.tabset width="65%"}
+
+```{r}
+#| label: Sales based on Fuel Type v1 
+#| title: Volatility indicates sensitivity to market conditionsYoY Sales Changes based on Fuel 2010-2024 
+
+  
+df_growth %>%
+  filter(date >= "2016-01-01") %>%
+  ggplot(aes(x = date, y = sales_yoy_pct, color = fuel_type, group = fuel_type)) +
+  geom_line(size = 1.2, alpha = 0.8) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c(
+    "Electric" = "navy",
+    "Hybrid"  = "blue",
+    "Diesel"  = "steelblue",
+    "Petrol"  = "turquoise"
+  )) +
+  labs(
+    title = "Year-on-Year Sales Growth by Fuel Type",
+    subtitle = "YoY Sales Changes based on Fuel 2010-2024",
+    x = "Year", y = "Sales Growth YoY(%)",
+    color = "Fuel Type"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "top"
+  ) +
+  geom_hline(yintercept = 0, color = "black", linetype = "solid")+
+  geom_hline(yintercept = 5, color = "salmon", linetype = "dashed")+
+  geom_hline(yintercept = -5, color = "salmon", linetype = "dashed")
+
+
+```
+
+```{r}
+#| label: Sales based on Fuel Type v2 
+#| title: Petrol and Electric Vehicles are More Consistent in Sales 
+
+
+ggplot(volatility_df, aes(x = volatility, y = avg_growth, label = fuel_type,
+                          color = fuel_type)) +
+  geom_point(size = 4) +
+  geom_text(vjust = -1) +
+  scale_color_manual(values = c(
+    "Electric" = "navy", "Hybrid" = "blue",
+    "Diesel" = "steelblue", "Petrol" = "turquoise"
+  )) +
+  coord_cartesian(ylim=c(0,.8))+
+  labs(
+    title = "Growth vs Volatility by Fuel Type",
+    subtitle = "High volatility = greater sensitivity; lower = more stable performance",
+    x = "Volatility (SD of YoY Growth %)",
+    y = "Average Sales Annual Growth (%)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+
+```
+
+## Difference in Sales based on Region Type per year {height="40%"}
+
+### Sales per Region comparing Developed and Developing market {width ="30%"}
+
+```{r}
+#| label: Sales per Region prep
+#| include: false
+
+
+
+
+df_growth_region <- df %>%
+  group_by(region, date) %>%
+  summarise(
+    annual_sales = sum(sales_volume, na.rm = TRUE),
+    annual_revenue = sum(revenue, na.rm = TRUE),
+    avg_annual_price=mean(price_usd,na.rm=T),
+    .groups = "drop"
+  )%>%
+    mutate(
+    region_group = ifelse(region %in% c("Europe", "North America"), 
+                          "High Income Regions", 
+                          "Rest of World")
+  )%>%
+  group_by(region_group, date) %>%
+  summarise(annual_sales = sum(annual_sales, na.rm = TRUE), 
+            annual_revenue = sum(annual_revenue, na.rm = TRUE),
+    avg_annual_price=median(avg_annual_price,na.rm=T),.groups = "drop") %>%
+  arrange(date) %>%
+  group_by(region_group) %>%
+  mutate(sales_yoy_growth = (annual_sales - lag(annual_sales)) / lag(annual_sales) * 100,
+    base_price = avg_annual_price[date==base_year],
+    price_index = round((avg_annual_price-base_price)/base_price*100,3),
+    revenue_yoy_growth = round((annual_revenue - lag(annual_revenue)) / lag(annual_revenue),3),
+    sales_yoy_pct = sales_yoy_growth * 100,
+    revenue_yoy_pct = revenue_yoy_growth * 100,
+    sales_absolute_growth = annual_sales - lag(annual_sales),
+    revenue_absolute_growth = annual_revenue - lag(annual_revenue)
+  ) %>%
+  ungroup()
+
+
+
+```
+
+```{r}
+#| label: Year-on-Year Sales Growth based on Income Region
+#| title: Where is our Market Growing ( Developed vs Developing Market )
+#| fig-subcap: Developed Regions  (Europe and North America)
+
+
+df_growth_region %>%
+  filter(date!="2010-01-01")|>
+  ungroup()|>
+  ggplot(aes(x = date, y = sales_yoy_growth, color = region_group)) +
+  geom_line(size = 1.3) +
+  geom_point(size = 1.2) +
+  scale_color_manual(values = c("High Income Regions" = "steelblue", "Rest of World" = "gray70")) +
+  geom_vline(xintercept = as.Date("2020-01-01"), linetype = "dashed",
+  color = "salmon") +
+  labs(
+    title = "Year-on-Year Sales Growth",
+    subtitle = "High Income Regions vs. Rest of World",
+    y = "YoY Growth (%)",
+    x = "Year",
+    color = "Region Group"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+### Changes in Developed and Developing Markets {width ="40%"}
+
+
+```{r}
+#| label: Testing for Correlation period 
+#| include: false 
+library(zoo)
+
+df_wide <- df_growth_region %>%
+  select(date, region_group, sales_yoy_growth) %>%
+  pivot_wider(names_from = region_group, values_from = sales_yoy_growth)
+
+
+# Test multiple windows side-by-side
+df_test <- df_wide %>%
+  mutate(
+    corr_2y = rollapplyr(
+      data.frame(`High Income Regions`, `Rest of World`),
+      width = 2,
+      FUN = function(x) cor(x[,1], x[,2], use = "pairwise.complete.obs"),
+      by.column = FALSE,
+      fill = NA
+    ),
+    corr_3y = rollapplyr(
+      data.frame(`High Income Regions`, `Rest of World`),
+      width = 3,
+      FUN = function(x) cor(x[,1], x[,2], use = "pairwise.complete.obs"),
+      by.column = FALSE,
+      fill = NA
+    ),
+    corr_5y = rollapplyr(
+      data.frame(`High Income Regions`, `Rest of World`),
+      width = 5,
+      FUN = function(x) cor(x[,1], x[,2], use = "pairwise.complete.obs"),
+      by.column = FALSE,
+      fill = NA
+    )
+  )
+
+# Plot all three to compare
+ggplot(df_test, aes(x = date)) +
+  geom_line(aes(y = corr_2y, color = "2-year"), size = 1) +
+  geom_line(aes(y = corr_3y, color = "3-year"), size = 1) +
+  geom_line(aes(y = corr_5y, color = "5-year"), size = 1) +
+  scale_color_manual(values = c("2-year" = "red", "3-year" = "blue", "5-year" = "green")) +
+  labs(title = "Rolling Correlation with Different Windows",
+       y = "Correlation",
+       color = "Window Size") +
+  theme_minimal()
+
+df_wide <- df_wide %>%
+  mutate(
+    rolling_cor = rollapplyr(
+      data.frame(`High Income Regions`, `Rest of World`),
+      width = 3,
+      FUN = function(x) cor(x[,1], x[,2], use = "pairwise.complete.obs"),
+      by.column = FALSE,
+      fill = NA
+    ))
+
+
+df_wide |> 
+  filter (date >= as.Date("2012-01-01"))|>
+  ggplot( aes(x = date, y = rolling_cor)) +
+  geom_line(color = "steelblue", size = 1.3) +
+  geom_point()+
+  geom_vline(xintercept = as.Date("2020-01-01"), linetype = "dashed", color = "red") +
+  labs(
+    title = "Rolling Correlation: Developed vs Developing Regions",
+    subtitle = "Shift from negative to positive correlation post-COVID",
+    x = "Year", y = "Correlation"
+  ) +
+  theme_minimal(base_size = 12)
+
+
+df_wide <- df_wide %>%
+  mutate(
+    post_covid = ifelse(date >= as.Date("2020-01-01"), 1, 0),
+    time = row_number()
+  )
+
+lm_its <- lm(rolling_cor ~ time + post_covid + I(time*post_covid), data = df_wide)
+summary(lm_its)
+
+
+# Plot rolling correlation with fitted ITS trend lines
+df_wide <- df_wide %>%
+  filter(date>= as.Date("2012-01-01"))|>
+  mutate(fitted = predict(lm_its))
+```
+
+```{r}
+#| label: Correlation Changes  
+#| title: How Covid Affects Market Synchronization
+#| fig-subcap: How are market moving in relation to each other  
+
+ggplot(df_wide, aes(x = date, y = rolling_cor)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_line(aes(y = fitted), color = "darkred", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = as.Date("2020-01-01"), linetype = "dotted", color = "red") +
+  labs(
+    title = "Developed vs. Developing Region Synchronization",
+    subtitle = "Rolling 5-year correlation in annual sales growth (2010–2025)",
+    x = "Year", y = "Rolling Correlation"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+```
+### Models Performance Before, During and After Covid {width ="30%"}
+
+```{r}
+#| label: prep data for models 
+#| include: false
+ 
+pre_period <- 2015:2019
+covid_period <- 2020:2021
+post_period <- 2022:2024
+
+df_yoy <- df %>%
+  mutate(year = lubridate::year(date)) %>%
+  group_by(model, year) %>%
+  summarise(annual_sales = sum(sales_volume, na.rm = TRUE), .groups = "drop_last") %>%
+  arrange(model, year) %>%
+  mutate(yoy_growth = (annual_sales - lag(annual_sales)) / lag(annual_sales) * 100) %>%
+  ungroup()
+
+
+df_volatility_periods <- df_yoy %>%
+  group_by(model) %>%
+  summarise(
+    vol_pre  = sd(yoy_growth[year %in% pre_period], na.rm = TRUE),
+    vol_covid = sd(yoy_growth[year %in% covid_period], na.rm = TRUE),
+    vol_post = sd(yoy_growth[year %in% post_period], na.rm = TRUE),
+    avg_price = mean(df$price_usd[df$model == first(model)], na.rm = TRUE),
+    fuel_type = first(df$fuel_type[df$model == first(model)]),
+    region = first(df$region[df$model == first(model)]),
+    .groups = "drop"
+  )
+
+df_volatility_periods <- df_volatility_periods %>%
+  mutate(
+    covid_vol_ratio = vol_covid / vol_pre,
+    post_vol_ratio = vol_post / vol_pre,
+    volatility_change = vol_post - vol_pre
+  )
+
+df_volatility_periods <- df_volatility_periods %>%
+  mutate(
+    volatility_pattern = case_when(
+      covid_vol_ratio > 1.45 & post_vol_ratio > 1.1 ~ "Persistent Volatility",
+      covid_vol_ratio > 1.45 & post_vol_ratio <= 1.1 ~ "Temporary Shock",
+      covid_vol_ratio <1 & post_vol_ratio >1.45 ~"Lagged Shock",
+      TRUE ~ "Stable"
+    )
+  )
+
+df_model_perf <- df %>%
+  mutate(year = lubridate::year(date)) %>%
+  group_by(model) %>%
+  summarise(
+    avg_sales = mean(sales_volume, na.rm = TRUE),
+    total_sales = sum(sales_volume, na.rm = TRUE),
+    sales_volatility = sd(sales_volume, na.rm = TRUE),
+    cv_sales = sales_volatility / avg_sales,  # coefficient of variation
+    fuel_type = first(fuel_type),
+    region = first(region),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    performance_score = scale(avg_sales) - scale(cv_sales)  # high sales, low volatility
+  ) %>%
+  arrange(desc(performance_score))
+
+
+```
+
+
+```{r}
+#| label: Model's performance 
+#| title: Performance and Resiliency of Models 
+#| fig-subcap: Resiliency = covid volatility/pre-covid volatility 
+
+df_model_perf %>%
+  left_join(df_volatility_periods, by = "model")%>%
+  select(model,region.x, fuel_type.x, performance_score,vol_pre,vol_covid,
+         vol_post,covid_vol_ratio:volatility_pattern)|>
+  ggplot(aes(x=performance_score,y=covid_vol_ratio, color=volatility_pattern))+
+  geom_hline(yintercept = 1.1, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_text_repel(aes(label = model), 
+                  size = 3, 
+                  max.overlaps = 10, 
+                  box.padding = 0.35, 
+                  segment.color = "grey70") +
+  scale_color_manual(values=c(    "Persistent Volatility" = "red",
+    "Temporary Shock" = "lightblue",
+    "Lagged Shock"="salmon",
+    "Stabilized" = "lightblue",
+    "Stable" = "deepskyblue"))+
+  labs(
+    title = "",
+    subtitle = "Cross-classifying model performance with pandemic impact",
+    x = "Performance Score (Sales Strength + Consistency)",
+    y = "COVID Impact on Sales (%)",
+    color = "Resilience Category"
+  ) +
+  theme_minimal()
+
+```
+
