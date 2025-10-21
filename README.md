@@ -1,2 +1,3 @@
 # Data-Analysis-BMW-Sales-2010-2024
-Project investigate trends in BMW sales and revenue for the 2010-2024 period. 
+
+This repo is for my analysis on BMW sales 2010 - 2024
