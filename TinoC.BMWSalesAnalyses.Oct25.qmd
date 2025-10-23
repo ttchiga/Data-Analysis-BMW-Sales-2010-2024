@@ -1,7 +1,9 @@
 ---
 title: "BMW Sales Analysis 2010-2024"
 format: 
-  dashboard
+  dashboard:
+    nav-buttons: [github]
+    github: https://github.com/ttchiga/Data-Analysis-BMW-Sales-2010-2024.git
 fig-width: 10
 fig-asp: 0.3
 ---
@@ -28,6 +30,8 @@ library(broom)
 library(purrr)
 library(forcats)
 library(ggrepel)
+library(gt)
+library(kableExtra)
 ```
 
 ```{r}
@@ -57,7 +61,6 @@ str(df)
 #| include: false 
 
 df$date <- as.Date(paste0(df$Year,"-01-01"))
-df$fuel_efficiency <-as.factor(df$Engine_Size_L)
 
 df%>%
   group_by(Sales_Classification)%>%
@@ -71,17 +74,64 @@ df%>%
 df<- df%>%
   clean_names()%>%
   mutate(revenue = sales_volume*price_usd,
-         gasoline_consumption= as.factor(engine_size_l))
+        model_family = case_when(
+      model %in% c("X1","X3","X5","X6") ~"SUV",
+      model %in% c("i8", "i3") ~ "Electric/Hybrid",
+      model %in% c("3 Series", "5 Series",  "7 Series" ) ~ "Sedan",
+      model %in% c("M3", "M5") ~ "Performance"),
+      engine_size = case_when(
+        engine_size_l >=1.0 & engine_size_l<=2.0 ~"Small Engine",
+        engine_size_l > 2.0 & engine_size_l<=3.0 ~"Medium Engine",
+        engine_size_l > 3.0 & engine_size_l<=5 ~ "Large Engine"
+      ),
+      num_engine_size = case_when(
+        engine_size_l >=1.0 & engine_size_l<=2.0 ~1,
+        engine_size_l > 2.0 & engine_size_l<=3.0 ~2,
+        engine_size_l > 3.0 & engine_size_l<=5 ~ 3
+      ),
+      fuel = case_when(
+        fuel_type =="Hybrid" ~0,
+         fuel_type =="Electric" ~ 1,
+         fuel_type =="Diesel" ~ 2,
+         fuel_type =="Petrol" ~ 3,
+      ),
+      year = lubridate::year(date),
+      age= max(year)-year,
+    )|>
+  select(-year)
 
+ 
 # Custom function to format numbers
 format_number <- function(x) {
   case_when(
-    abs(x) >= 1e12 ~ paste0(round(x/1e12,1), "T"),
-    abs(x) >= 1e6 ~ paste0(round(x/1e6, 1), "M"),
-    abs(x) >= 1e3 ~ paste0(round(x/1e3, 1), "K"),
+    abs(x) >= 1e12 ~ paste0(round(x/1e12,2), "T"),
+    abs(x) >= 1e6 ~ paste0(round(x/1e6, 2), "M"),
+    abs(x) >= 1e3 ~ paste0(round(x/1e3, 2), "K"),
     TRUE ~ as.character(x)
   )
 }
+
+# Function to extract strong correlations
+find_strong_correlations <- function(cor_matrix, threshold = 0.7) {
+  # Set diagonal to NA to avoid self-correlation
+  diag(cor_matrix) <- NA
+  
+  strong_pairs <- which(abs(cor_matrix) > threshold, arr.ind = TRUE)
+  
+  results <- data.frame(
+    Region1 = rownames(cor_matrix)[strong_pairs[, 1]],
+    Region2 = colnames(cor_matrix)[strong_pairs[, 2]],
+    Correlation = cor_matrix[strong_pairs]
+  )
+  
+  # Remove duplicates and sort by absolute correlation
+  results <- results[results$Region1 != results$Region2, ]
+  results <- results[order(abs(results$Correlation), decreasing = TRUE), ]
+  
+  return(results)
+}
+
+
 
 ```
 
@@ -150,7 +200,10 @@ df %>%
   scale_y_continuous(labels = scales::dollar) # Format y-axis as dollars
 ## the average 7 series over the years of analysis is the most expensive of the models under analysis 
 
+
+
 ```
+
 
 ```{r}
 #| label: Price trends over our years of interest across regions where BMWs are sold 
@@ -159,7 +212,8 @@ df %>%
 # First, let's create a summary data frame
 price_summary <- df %>% 
   group_by(date, region) %>%
-  summarise(avg_price = median(price_usd), .groups = 'drop')
+  summarise(avg_price = median(price_usd), .groups = 'drop')|>
+  mutate(date= lubridate::year(date))
 
 # Identify which regions to highlight (replace with your desired regions)
 highlight_regions <- c("North America", "Europe", "Asia")
@@ -170,6 +224,8 @@ label_data <- price_summary %>%
   filter(date == max(date))
 
 ```
+
+
 
 ```{r}
 #| label: Price Changes v2 
@@ -188,10 +244,12 @@ ggplot(price_summary, aes(x = date, y = avg_price, group = region)) +
   geom_point(data = filter(price_summary, region %in% highlight_regions),
              aes(color = region), size = 2, alpha = 0.8) +
   # Add labels only at the end of each line
-  geom_text_repel(data = label_data, 
+  
+    geom_text_repel(data = label_data, 
                   aes(label = region, color = region),
-                  size = 3.5, direction = "y", box.padding = 0.4,
-                  hjust = 0, nudge_x = 30, segment.size = 0.2,
+                  size = 4.5, fontface = "bold",
+                  direction = "y", box.padding = 0.6,
+                  hjust = 0, nudge_x = 1.8, 
                   show.legend = FALSE) +
   # Custom blue color palette for highlighted regions
   scale_color_manual(values = c("North America" = "darkblue", 
@@ -207,9 +265,10 @@ ggplot(price_summary, aes(x = date, y = avg_price, group = region)) +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
-    legend.position = "bottom"
+    legend.position = "none"
   ) +
-  scale_y_continuous(labels = scales::dollar)
+  scale_y_continuous(labels = scales::dollar)+
+  scale_x_continuous(limits = c(2010, 2026))  # Extra space for labels
 ## North America BMW's faced a huge increase in price after years in which they were the cheapest
 ## Asia has the highest prices of BMW's since 2017 
 ## Europe BMW's prices have been facing downward pressure 
@@ -247,39 +306,25 @@ scale_factor <-max_sales / (desired_max - desired_min)
 
 ```{r}
 #| label: Volume and Sales grap
-#| title: Price vs Volume over 2010-2024
+#| title: Annual Sales Per Region 
 
-
-ggplot(df_plot, aes(x=date))+
-  geom_col(aes(y=total_sales),fill="skyblue")+
-  geom_line(aes(y=(avg_price - desired_min)*scale_factor),color="blue",size=1.2,lineend="round")+
-  scale_y_continuous(
-    name="Sales",
-    limits = c(0, NA),  # keep sales axis starting at 0
-    labels = scales::label_number(scale = 1e-6, suffix = "M"),
-    sec.axis=sec_axis(~./scale_factor+desired_min, name="Price ",
-                        breaks = scales::pretty_breaks(5),
-              labels=scales::dollar))+ 
-      labs(
-    title = "No Concise Relationship Between Price and Volume"
-  ) +  
-  coord_cartesian(
-    ylim = c(5e-6, max(df_plot$total_sales, na.rm = TRUE) * 1.1)
-  ) +
-  guides(
-    fill = guide_legend(override.aes = list(alpha = 1)),  # Solid color swatches
-    color = guide_legend(override.aes = list(linetype = 1, shape = 16))  # Lines + points
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    plot.title = element_text(face = "bold", hjust = 0.5),
-    panel.grid.minor = element_blank(),
-    legend.position = "top"
-  ) 
-
+ df |> 
+  group_by(region,date)|>
+  summarise(annual_sales =sum(sales_volume))|>
+  ungroup()|>
+  group_by(region)|>
+  mutate( total_sales= sum(annual_sales, na.rm=TRUE))|>
+  ungroup()|>
+  mutate(date=lubridate::year(date),
+         annual_sales = format_number(annual_sales),
+         total_sales = format_number(total_sales))|>
+  pivot_wider(names_from = date, values_from = annual_sales)|>
+  relocate(total_sales, .after = last_col())|>
+  kable("html", caption = "Annual Sales per Region") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover"))
 
 ```
+
 
 ## Revenue {height ="35%"}
 
@@ -298,9 +343,9 @@ df|>
             fill = "lightgray", alpha = 0.2) +
   geom_line(color="lightblue",size =1.5)+
   geom_point(alpha=.8, color="blue")+
-  geom_vline(xintercept =as.Date("2020-01-01"), linetype = "dashed", color = "blue", linewidth = 1)+
+  geom_vline(xintercept =as.Date("2020-01-01"), linetype = "dashed", color = "red", linewidth = 1)+
     scale_y_continuous( labels = label_dollar(scale = 1e-9, suffix = "B"))+
-  labs(title="Revenue Trend",
+  labs(title="Revenue Before and After Covid",
     x="",y="Revenue ")+
   theme_minimal()+
    theme(
@@ -407,7 +452,6 @@ df_growth <- df %>%
   ) %>%
   ungroup()
 
-
 volatility_df <- df_growth %>%
   group_by(fuel_type) %>%
   summarise(
@@ -417,41 +461,36 @@ volatility_df <- df_growth %>%
   arrange(desc(volatility))
 
 
+
 ```
 
 ### Difference in Sales based on Fuel Type per year {.tabset width="65%"}
 
 ```{r}
 #| label: Sales based on Fuel Type v1 
-#| title: Volatility indicates sensitivity to market conditionsYoY Sales Changes based on Fuel 2010-2024 
+#| title: Changes in Market Tastes and Preferences 
 
-  
-df_growth %>%
-  filter(date >= "2016-01-01") %>%
-  ggplot(aes(x = date, y = sales_yoy_pct, color = fuel_type, group = fuel_type)) +
-  geom_line(size = 1.2, alpha = 0.8) +
-  geom_point(size = 1) +
-  scale_color_manual(values = c(
-    "Electric" = "navy",
-    "Hybrid"  = "blue",
-    "Diesel"  = "steelblue",
-    "Petrol"  = "turquoise"
-  )) +
-  labs(
-    title = "Year-on-Year Sales Growth by Fuel Type",
-    subtitle = "YoY Sales Changes based on Fuel 2010-2024",
-    x = "Year", y = "Sales Growth YoY(%)",
-    color = "Fuel Type"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    plot.title = element_text(face = "bold", hjust = 0.5),
-    legend.position = "top"
-  ) +
-  geom_hline(yintercept = 0, color = "black", linetype = "solid")+
-  geom_hline(yintercept = 5, color = "salmon", linetype = "dashed")+
-  geom_hline(yintercept = -5, color = "salmon", linetype = "dashed")
+df|>
+  group_by(date,model_family,region)|>
+  summarize(annual_sales = sum(sales_volume),
+            avg_price = median(price_usd),
+            .groups = "drop")|>
+  ungroup()|>
+  ggplot(aes(date,annual_sales, group=model_family))+
+  geom_line(aes(color=model_family),size=1.1)+
+  geom_point(color="steelblue1", alpha =.5)+
+  facet_wrap(.~region)+
+  scale_color_manual(
+    values = c( "SUV"="skyblue4",
+     "Electric/Hybrid"="skyblue1",
+     "Sedan"="deepskyblue",
+       "Performance"="gray80"))+
+  theme_minimal()+
+  labs(y="Annual Sales",x="",
+       subtitle = "Changes in Model Composition in Different Markets")+
+  scale_y_continuous(labels=format_number)+
+  theme(plot.subtitle = element_text(hjust = .5,  size = 16),
+        legend.position = "top")
 
 
 ```
@@ -489,8 +528,6 @@ ggplot(volatility_df, aes(x = volatility, y = avg_growth, label = fuel_type,
 ```{r}
 #| label: Sales per Region prep
 #| include: false
-
-
 
 
 df_growth_region <- df %>%
@@ -642,6 +679,32 @@ summary(lm_its)
 df_wide <- df_wide %>%
   filter(date>= as.Date("2012-01-01"))|>
   mutate(fitted = predict(lm_its))
+
+
+df_growth_cor <- df %>%
+  group_by(region, date) %>%
+  summarise(
+    annual_sales = sum(sales_volume, na.rm = TRUE),
+    annual_revenue = sum(revenue, na.rm = TRUE),
+    avg_annual_price=mean(price_usd,na.rm=T),
+    .groups = "drop"
+  )|>
+  mutate(sales_yoy_growth = (annual_sales - lag(annual_sales)) / lag(annual_sales) * 100
+  )|>
+  ungroup()|>
+  filter(date!=as.Date("2010-01-01"))|>
+    select (date,region, sales_yoy_growth)|>
+  pivot_wider(names_from = region, values_from = sales_yoy_growth)
+
+
+# Calculate correlation matrix between regions
+# Remove the Year column for correlation calculation
+region_correlations <- cor(df_growth_cor[, -1]) # Exclude Year column
+
+
+# Find strongly correlated regions
+strong_corrs <- find_strong_correlations(region_correlations, threshold = 0.35)
+
 ```
 
 ```{r}
@@ -684,6 +747,7 @@ df_yoy <- df %>%
 df_volatility_periods <- df_yoy %>%
   group_by(model) %>%
   summarise(
+    
     vol_pre  = sd(yoy_growth[year %in% pre_period], na.rm = TRUE),
     vol_covid = sd(yoy_growth[year %in% covid_period], na.rm = TRUE),
     vol_post = sd(yoy_growth[year %in% post_period], na.rm = TRUE),
@@ -761,7 +825,40 @@ df_model_perf %>%
     y = "COVID Impact on Sales (%)",
     color = "Resilience Category"
   ) +
-  theme_minimal()
+  theme_minimal()+
+    theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust=.5),
+    legend.position = "top"
+  )
 
 ```
+```{r}
+#| title: figuring it out
+#| include: false 
+
+set.seed(123)
+
+df_kcluster <- df|>
+  select(price_usd, engine_size_l, fuel, mileage_km, age)|>
+  scale()|>
+  as.data.frame()%>%
+  sample_n(min(5000, nrow(.)))
+
+fviz_nbclust(df_kcluster, kmeans, method = "wss") +
+  labs(title = "Elbow Method for Optimal k")
+
+
+kmeans_res <- kmeans(df_kcluster, centers = 4, nstart = 25)
+
+fviz_cluster(kmeans_res, data = df_kcluster,
+             geom = "point",
+             ellipse.type = "convex",
+             repel = TRUE,
+             ggtheme = theme_minimal())
+
+```
+
+
+
 

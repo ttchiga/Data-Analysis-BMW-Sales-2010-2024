@@ -1,0 +1,4 @@
+- source: TinoC.BMWSalesAnalyses.Oct25.qmd
+  quarto-pub:
+    - id: bf04f38a-29c9-4f46-bd6b-10f1296a5dd3
+      url: https://ttchigasa.quarto.pub/bmw-sales-analysis-2010-2024
